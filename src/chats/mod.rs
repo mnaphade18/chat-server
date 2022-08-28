@@ -1,10 +1,14 @@
-use actix_web::{ web, get, post, Responder, Scope, HttpResponse };
+pub mod socket;
+
 use serde::{ Serialize, Deserialize };
+use actix_web::{ web, get, post, http::header, error, Responder, Scope, HttpResponse, HttpRequest };
+use actix_web_actors::ws;
 
 use crate::models::chat::Chat;
 use crate::models::message::{ Message, NewMessageInput };
 use crate::state::AppState;
 use crate::models::user::User;
+use socket::Socket;
 
 #[derive(Serialize, Debug)]
 struct UsersResponse {
@@ -52,9 +56,13 @@ async fn user_chats(path: web::Path<String>, app_state: web::Data<AppState>) -> 
         .json(user_chats)
 }
 
-#[get("/messages/{group_id}/{user_id}")]
-async fn get_messages(path: web::Path<(String, String)>, app_state: web::Data<AppState>) -> impl Responder {
-    let (group_id, user_id) = path.into_inner();
+#[get("/messages/{group_id}")]
+async fn get_messages(req: HttpRequest, path: web::Path<String>, app_state: web::Data<AppState>) -> impl Responder {
+    let group_id = path.into_inner();
+    let user_id = req.headers()
+        .get(header::HeaderName::from_static("x-user-id")).unwrap()
+        .to_str().unwrap()
+        .to_string();
 
     {
         let chats = app_state.chats.lock().unwrap();
@@ -81,8 +89,36 @@ async fn add_message(body: web::Json<NewMessageInput>, app_state: web::Data<AppS
     let mut messages = app_state.messages.lock().unwrap();
     messages.push(new_message.clone());
 
+    for (user_id, addr) in app_state.active_users.lock().unwrap().iter() {
+        println!("sending message to user id {user_id}");
+
+        addr.do_send(new_message.clone());
+    }
+
     HttpResponse::Ok()
         .json(new_message)
+}
+
+#[get("/messages/{group_id}/{user_id}/ws")]
+async fn connect_group(req: HttpRequest, stream: web::Payload, path: web::Path<(String, String)>, app_state: web::Data<AppState>) -> impl Responder {
+    let (group_id, user_id) = path.into_inner();
+
+    {
+        let groups = app_state.chats.lock().unwrap();
+
+        if !groups.iter().any(|g| g.id == group_id && g.users.iter().any(|uid| *uid == user_id)) {
+            return Err(error::ErrorNotFound("Invalid group"))
+        }
+    }
+
+    let (addr, response) = ws::WsResponseBuilder::new(Socket {}, &req, stream)
+        .start_with_addr()
+        .unwrap();
+
+    let mut active_users = app_state.active_users.lock().unwrap();
+    active_users.insert(user_id, addr);
+
+    return Ok(response);
 }
 
 pub fn chats_scope() -> Scope {
@@ -92,4 +128,5 @@ pub fn chats_scope() -> Scope {
         .service(user_chats)
         .service(get_messages)
         .service(add_message)
+        .service(connect_group)
 }
