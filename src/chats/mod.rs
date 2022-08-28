@@ -89,11 +89,22 @@ async fn add_message(body: web::Json<NewMessageInput>, app_state: web::Data<AppS
     let mut messages = app_state.messages.lock().unwrap();
     messages.push(new_message.clone());
 
-    for (user_id, addr) in app_state.active_users.lock().unwrap().iter() {
-        println!("sending message to user id {user_id}");
+    drop(messages);
 
-        addr.do_send(new_message.clone());
+    let active_users = app_state.active_users.lock().unwrap();
+    let chats = app_state.chats.lock().unwrap();
+    let group = chats.iter().find(|c| *c.id == new_message.group_id).unwrap();
+
+    for user_id in group.users.iter() {
+        if let Some(addr) = active_users.get(user_id) {
+            println!("sending message to user id {user_id}");
+
+            addr.do_send(new_message.clone());
+        }
     }
+
+    drop(active_users);
+    drop(chats);
 
     HttpResponse::Ok()
         .json(new_message)
@@ -107,7 +118,7 @@ async fn connect_group(req: HttpRequest, stream: web::Payload, path: web::Path<(
         let groups = app_state.chats.lock().unwrap();
 
         if !groups.iter().any(|g| g.id == group_id && g.users.iter().any(|uid| *uid == user_id)) {
-            return Err(error::ErrorNotFound("Invalid group"))
+            return Err(error::ErrorBadRequest("Invalid group"))
         }
     }
 

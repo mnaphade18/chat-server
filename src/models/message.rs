@@ -36,7 +36,7 @@ impl Message {
             content: input.content,
             sender_id: input.sender_id,
             group_id: input.group_id,
-            message_type: message_type,
+            message_type,
         }
     }
 }

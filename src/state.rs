@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use actix_web::web::Data;
 use actix::prelude::Addr;
-use uuid::Uuid;
 
 use crate::models::user::User;
 use crate::models::message::Message;
